@@ -1,0 +1,202 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Caveman World</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #222;
+      color: #eee;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+    #panel {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(0,0,0,0.6);
+      padding: 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      max-width: 320px;
+      line-height: 1.4;
+    }
+    canvas { display: block; }
+    .small { opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <div id="panel" class="small"></div>
+  <script src="sim.js"></script>
+  <script>
+    (function() {
+      const { World, TILE_COLORS } = window.CavemanWorld;
+      const canvas = document.getElementById('view');
+      const ctx = canvas.getContext('2d');
+      const panel = document.getElementById('panel');
+      let world;
+      let paused = false;
+      let ticksPerFrame = 1;
+      let selected = null;
+      let seed = 1;
+
+      function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      function regenerate(newSeed) {
+        seed = newSeed !== undefined ? newSeed : (seed + 1);
+        world = new World({ seed, width: 120, height: 80 });
+      }
+
+      regenerate(Date.now() % 100000);
+
+      function drawTileMap() {
+        const tileSize = Math.max(4, Math.floor(Math.min(canvas.width / world.width, canvas.height / world.height)));
+        ctx.setTransform(tileSize, 0, 0, tileSize, 0, 0);
+        for (let y = 0; y < world.height; y++) {
+          for (let x = 0; x < world.width; x++) {
+            ctx.fillStyle = TILE_COLORS[world.map.get(x, y)] || '#777';
+            ctx.fillRect(x, y, 1, 1);
+          }
+        }
+
+        ctx.fillStyle = '#d9c27e';
+        for (const s of world.items) {
+          ctx.fillRect(s.x - 0.1, s.y - 0.1, 0.2, 0.2);
+        }
+
+        ctx.fillStyle = '#cfa96e';
+        for (const shelter of world.shelters) {
+          ctx.fillRect(shelter.x, shelter.y, 1, 1);
+        }
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        return tileSize;
+      }
+
+      function drawEntities(tileSize) {
+        const scale = tileSize;
+        for (const e of world.entities) {
+          const cx = e.x * scale;
+          const cy = e.y * scale;
+          let color = '#fff';
+          if (e.type === 'human') {
+            color = e.sex === 'male' ? '#ffd479' : '#ff8ba7';
+          } else if (e.type === 'sheep') {
+            color = '#eeeeee';
+          } else if (e.type === 'wolf') {
+            color = '#a0a0a0';
+          }
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 0.3 * scale, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Need bars (health, hunger, thirst)
+          const barW = 0.35 * scale;
+          const barH = 3;
+          const drawBar = (offsetY, value, color) => {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(cx - barW / 2, cy - offsetY, barW, barH);
+            ctx.fillStyle = color;
+            ctx.fillRect(cx - barW / 2, cy - offsetY, (barW * value) / 100, barH);
+          };
+          drawBar(0.35 * scale, e.needs.health, '#68e0a3');
+          drawBar(0.35 * scale - 5, 100 - e.needs.hunger, '#ffd166');
+          drawBar(0.35 * scale - 10, 100 - e.needs.thirst, '#6ec3ff');
+
+          if (selected && selected.id === e.id) {
+            ctx.strokeStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 0.4 * scale, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+      }
+
+      function updatePanel() {
+        const lines = [
+          '<strong>Caveman World</strong>',
+          `Seed: ${seed}`,
+          `Tick: ${world.tick}`,
+          `Entities: ${world.entities.length}`,
+          `Controls: space pause, +/- speed (${ticksPerFrame}x), R regenerate`
+        ];
+        if (selected) {
+          lines.push('<hr>');
+          lines.push(`Selected: ${selected.type} #${selected.id}${selected.isBaby ? ' (baby)' : ''}`);
+          lines.push(`Action: ${selected.currentAction}`);
+          lines.push(`Sex: ${selected.sex || 'n/a'}`);
+          lines.push(`Pos: ${selected.x.toFixed(1)}, ${selected.y.toFixed(1)}`);
+          lines.push('Needs:');
+          Object.entries(selected.needs).forEach(([k, v]) => {
+            lines.push(`- ${k}: ${v.toFixed(1)}`);
+          });
+          if (selected.inventory) {
+            lines.push('Inventory:');
+            Object.entries(selected.inventory).forEach(([k, v]) => lines.push(`- ${k}: ${v}`));
+          }
+          if (selected.knowledge) {
+            lines.push('Knowledge:');
+            lines.push(`- discovered: ${selected.knowledge.discoveredTypes.size}`);
+            lines.push(`- danger wolf: ${(selected.knowledge.dangerScore['wolf'] || 0).toFixed(2)}`);
+            lines.push(`- food sheep: ${(selected.knowledge.foodScore['sheep'] || 0).toFixed(2)}`);
+          }
+        }
+        panel.innerHTML = lines.join('<br>');
+      }
+
+      function stepSim() {
+        if (!paused) {
+          for (let i = 0; i < ticksPerFrame; i++) {
+            world.step();
+          }
+        }
+      }
+
+      function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const tileSize = drawTileMap();
+        drawEntities(tileSize);
+        updatePanel();
+        requestAnimationFrame(render);
+      }
+
+      function screenToWorld(px, py) {
+        const tileSize = Math.max(4, Math.floor(Math.min(canvas.width / world.width, canvas.height / world.height)));
+        return { x: px / tileSize, y: py / tileSize };
+      }
+
+      canvas.addEventListener('click', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const wx = e.clientX - rect.left;
+        const wy = e.clientY - rect.top;
+        const pos = screenToWorld(wx, wy);
+        let nearest = null;
+        let best = 1.2;
+        for (const ent of world.entities) {
+          const d = Math.hypot(ent.x - pos.x, ent.y - pos.y);
+          if (d < best) { best = d; nearest = ent; }
+        }
+        selected = nearest;
+      });
+
+      window.addEventListener('keydown', (e) => {
+        if (e.key === ' ') { paused = !paused; }
+        if (e.key === '+' || e.key === '=') { ticksPerFrame = Math.min(20, ticksPerFrame + 1); }
+        if (e.key === '-') { ticksPerFrame = Math.max(1, ticksPerFrame - 1); }
+        if (e.key.toLowerCase() === 'r') { regenerate((seed + 137) % 100000); }
+      });
+
+      setInterval(stepSim, 16);
+      requestAnimationFrame(render);
+    })();
+  </script>
+</body>
+</html>
